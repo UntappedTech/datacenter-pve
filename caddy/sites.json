@@ -1,0 +1,34 @@
+{
+    "untapped.tech": {
+        "redirects_from": [
+            "untapped.cloud",
+            "untapped.codes",
+            "untappedtechnologies.com"
+        ],
+        "fallback_handler": "root * /srv/untapped\nencode gzip zstd\ntemplates\nrewrite *.html /index.html\nfile_server",
+        "services": {
+            "home": {
+                "hostnames": ["home"],
+                "custom_handler": "root * /srv/untapped\nencode gzip zstd\ntemplates\nrewrite *.md /index.html\nfile_server browse"
+            },
+            "uptime": {
+                "hostnames": ["uptime"],
+                "proxy_target": {
+                    "protocol": "",
+                    "host_address": "10.0.0.100",
+                    "port": "3001"
+                },
+                "proxy_mixin": "proxy_opts_default"
+            }
+        }
+    },
+    "etherealprince.com": {
+        "redirects_from": [
+            "etherealprince.love",
+            "etherealprince.me",
+            "etherealprince.online"
+        ],
+        "fallback_handler": "root * /srv/etherealprince\nencode gzip zstd\ntemplates\nrewrite *.html /index.html\nfile_server",
+        "services": {}
+    }
+}

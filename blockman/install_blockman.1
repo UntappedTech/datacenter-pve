@@ -1,0 +1,71 @@
+.\" Man page for install-blockman.sh
+.TH install-blockman 1 "July 02, 2025" "Version 1.0.0" "User Commands"
+.SH NAME
+install-blockman \- install default blockman configurations and shell completions
+.SH SYNOPSIS
+.B install-blockman
+[\fB--install-configs\fR]
+[\fB--install-completions\fR]
+[\fB--uninstall-completions\fR]
+[\fB--help\fR]
+.SH DESCRIPTION
+.B install-blockman
+is a companion script for \fBblockman\fR that handles the setup and installation of its default configuration files and shell completion scripts. This script simplifies the initial setup process, allowing users to quickly integrate \fBblockman\fR into their system.
+.SH OPTIONS
+.TP
+\fB--install-configs\fR
+Generate and install the default system-wide configuration file at \fB/etc/default/blockman\fR and the user-specific configuration file at \fB~/.config/blockman.conf\fR. This will not overwrite existing files if they are already present.
+.TP
+\fB--install-completions\fR
+Detect the current shell (Bash, Zsh, or Fish) and install the appropriate shell completion script for \fBblockman\fR. This typically requires root privileges for system-wide installation locations (e.g., \fB/etc/bash_completion.d/\fR or \fB/usr/local/share/zsh/site-functions/\fR) or user write access for user-specific locations (\fB~/.config/fish/completions/\fR).
+.TP
+\fB--uninstall-completions\fR
+(Not yet fully implemented) Intended to remove the installed shell completion scripts.
+.TP
+\fB--help\fR, \fB-h\fR, \fI-?\fR
+Display a help message and exit.
+.SH FILES
+.TP
+\fB/etc/default/blockman\fR
+System-wide default configuration file for \fBblockman\fR.
+.TP
+\fB~/.config/blockman.conf\fR
+User-specific configuration file for \fBblockman\fR.
+.TP
+\fB/etc/bash_completion.d/blockman.sh\fR
+Typical installation path for Bash completion script.
+.TP
+\fB/usr/local/share/zsh/site-functions/_blockman\fR
+Typical installation path for Zsh completion script.
+.TP
+\fB~/.config/fish/completions/blockman.fish\fR
+Typical installation path for Fish completion script.
+.SH EXIT STATUS
+.TP
+\fB0\fR (\fBSUCCESS\fR)
+The command completed successfully.
+.TP
+\fB1\fR (\fBERR_GENERAL\fR)
+A general or unspecified error occurred.
+.TP
+\fB2\fR (\fBERR_INVALID_ARG\fR)
+An invalid or missing command-line option was provided.
+.TP
+\fB3\fR (\fBERR_PERMISSION_DENIED\fR)
+The script lacks the necessary permissions to create directories or write files to the installation paths.
+.TP
+\fB4\fR (\fBERR_SHELL_DETECT_FAILED\fR)
+The installer could not detect or does not support the current shell for completion installation.
+.TP
+\fB5\fR (\fBERR_INSTALL_PATH\fR)
+There was an issue with the target installation path (e.g., failed to write completion file).
+.SH SEE ALSO
+.BR blockman(1),
+.BR sh(1)
+.SH BUGS
+Report bugs to <your-email@example.com>
+.SH AUTHORS
+Your Name <your-email@example.com>
+.SH COPYRIGHT
+Copyright (c) 2025, Your Name. Licensed under the MIT License.
+.\" END of Man page for install-blockman.sh

@@ -1,0 +1,27 @@
+# You may uncomment the following lines if you want `ls' to be colorized:
+export LS_OPTIONS='--color=auto --si --group-directories-first -A'
+eval "$(dircolors)"
+alias ls='ls $LS_OPTIONS '
+
+# Custom Aliases
+alias upgrade='apt-get update -qq && apt-get dist-upgrade -qq'
+#alias needs-reboot='needrestart'
+#alias needs-restart='needrestart'
+alias colorize='sed -E -e "s/(FAIL?\w+)|(ABORT?\w+)/\x1b[4;31m&\x1b[0m/gI" -e "s/(PASS?\w+)|(SUCCE\w+)|(COMPLETE?\w+)/\x1b[32m&\x1b[0m/gI" \
+                        -e "s/(ERROR?\w+)|(WARN.?\w+)/\x1b[1;31m&\x1b[0m/gI" -e "s/^([^:\*]+?):(\s|\n)/\x1b[1;36m&\x1b[0m/g" \
+                        -e "s/^( +?\* ).+: ?/\x1b[1;30m&\x1b[0m/g; s/^( +?\* ).+$/\x1b[1;30m&\x1b[0m/g"'
+# See dircolors to customize colors
+# Get color support for 'less'
+export LESS="--RAW-CONTROL-CHARS"
+
+# Use colors for less, man, etc.
+[[ -f ~/.LESS_TERMCAP ]] && . ~/.LESS_TERMCAP
+
+export GREP_OPTIONS="--color=auto"
+
+export TREE_OPTS='-xa --si --du --filesfirst --prune -L 3'
+alias tree='tree $TREE_OPTS'
+
+export EXA_OPTIONS='-1lFagHh --group-directories-first --color=always'
+alias l='exa $EXA_OPTIONS'
+alias ll='exa $EXA_OPTIONS -T -L 3'

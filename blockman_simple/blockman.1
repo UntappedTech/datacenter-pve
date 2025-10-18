@@ -1,0 +1,133 @@
+.TH BLOCKMAN 1 "July 7, 2025" "1.8.0" "blockman User Manual"
+
+.SH NAME
+blockman \- manage named blocks within configuration files
+
+.SH SYNOPSIS
+.B blockman
+.B --file
+.I FILE
+[\fIOPTIONS\fR] [\fB--id\fR \fIBLOCK_ID\fR]
+
+.SH DESCRIPTION
+.B blockman
+is a POSIX-compliant shell script that declaratively manages named blocks of text inside configuration files. It is designed to be idempotent, making it safe and reliable for use in automation and system administration scripts.
+
+Blocks are identified by start and end markers in comments. The default format is:
+.nf
+# START MY_BLOCK
+... content ...
+# END MY_BLOCK
+.fi
+.PP
+The script can create, replace, append to, transform, extract, and show these blocks. All modification actions are logged.
+
+.SH OPTIONS
+.TP
+\fB-b\fR, \fB--body\fR \fISTRING\fR
+Provides the content for the block as a literal string.
+.TP
+\fB-B\fR, \fB--body-file\fR \fIFILE\fR
+Reads the content for the block from the specified file.
+.TP
+\fB-a\fR, \fB--append\fR
+If the block already exists, append the new content to the end of the existing content instead of replacing it.
+.TP
+\fB-n\fR, \fB--no-clobber\fR
+If a block with the specified ID already exists, do nothing and exit successfully. Prevents accidental overwrites.
+.TP
+\fB-t\fR, \fB--transform\fR \fICMD\fR
+Pipe the existing block's content through the specified shell command (\fICMD\fR) and replace the block with the result.
+.TP
+\fB-x\fR, \fB--extract\fR
+Print the block's content to standard output and then remove the block from the file.
+.TP
+\fB-l\fR, \fB--list\fR
+List all unique block IDs found in the target file. Does not require an \fB--id\fR.
+.TP
+\fB-s\fR, \fB--show\fR
+Show the content of the block specified by \fB--id\fR.
+.TP
+\fB--to-json\fR
+Reads the log file associated with the target \fIFILE\fR, converts it to a JSON array, and prints it to standard output. Requires \fBawk\fR and \fBjq\fR to be installed.
+.TP
+\fB--comment-char\fR \fICHAR\fR
+Specifies the character to use for comment markers. Defaults to '#'. For example, use '//' for JavaScript or '--' for SQL.
+.TP
+\fB--dry-run\fR
+Perform all operations but do not modify the target file. Instead, print the would-be final content to standard output. A diff is still shown to standard error unless disabled.
+.TP
+\fB--no-diff\fR
+Do not output a diff of the changes to standard error.
+.TP
+\fB-h\fR, \fB--help\fR
+Show the usage message and exit.
+.TP
+\fB-v\fR, \fB--version\fR
+Show the script version and exit.
+
+.SH LOGGING
+By default, all actions that modify a file are logged to a plain text file inside the log directory. The log directory is determined by the \fBLOG_DIR\fR variable, which defaults to \fI/var/log/blockman\fR. The log filename is the flattened path of the file being modified (e.g., \fI/etc/nginx/nginx.conf\fR becomes \fI__etc__nginx__nginx.conf.log\fR).
+
+The log format is a hybrid of key-value pairs for metadata and a delimited block for multi-line diffs, designed to be both human-readable and machine-parsable. Use the \fB--to-json\fR flag to convert a log file to JSON.
+
+.SH CONFIGURATION
+.B blockman
+can be configured using files and environment variables. The order of precedence is:
+1. Shell Defaults (inside the script)
+2. System-wide config: \fI/etc/default/blockman\fR
+3. User-specific config: \fI$HOME/.config/blockman/blockman.conf\fR
+4. Environment Variables
+
+The following variables can be set:
+.TP
+\fBSTART_KEYWORDS\fR
+Pipe-separated list of keywords for the start marker (e.g., "START|BEGIN").
+.TP
+\fBEND_KEYWORDS\fR
+Pipe-separated list of keywords for the end marker (e.g., "END|FINISH").
+.TP
+\fBLOG_DIR\fR
+The base directory where log files are stored.
+
+.SH EXAMPLES
+.TP
+.B Create or replace a block in a config file:
+blockman --file /etc/motd --id GREETING --body "Welcome!"
+.TP
+.B Append a new path to a block, only if the block doesn't exist:
+blockman --file ~/.bashrc --id CUSTOM_PATHS -n --body 'export PATH="$HOME/.local/bin:$PATH"'
+.TP
+.B Show the content of a block in a C++ file:
+blockman --file src/main.cpp --id TODO --comment-char "//" -s
+.TP
+.B List all available blocks in a file:
+blockman --file /etc/hosts --list
+.TP
+.B Convert a log file to JSON for analysis:
+blockman --file /etc/motd --to-json | jq '.[-1].diff'
+
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B >0
+An error occurred. A descriptive message is printed to standard error.
+
+.SH FILES
+.TP
+\fI/etc/default/blockman\fR
+System-wide configuration file.
+.TP
+\fI$HOME/.config/blockman/blockman.conf\fR
+User-specific configuration file.
+.TP
+\fI/var/log/blockman/\fR
+Default directory for log files.
+
+.SH SEE ALSO
+.BR sed (1),
+.BR awk (1),
+.BR jq (1),
+.BR diff (1)

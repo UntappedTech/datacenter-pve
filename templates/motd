@@ -1,0 +1,8 @@
+#!/bin/bash
+source /etc/os-release
+echo -e "\t\t  ^[[1m $(systemctl show -P Description `hostname`) LXC Container^[[m"
+echo -e "\t🌐  ^[[m^[[33m Provided by: ^[[1;92mhttps://community-scripts.github.io/ProxmoxVE/scripts^[[m\n"
+
+echo -e "\t🖥️  ^[[m^[[33m OS: \t^[[1;92m${ID^} $(cat /etc/debian_version) ($VERSION_CODENAME)^[[m"
+echo -e "\t🏠  ^[[m^[[33m Hostname: ^[[1;92m${HOSTNAME^^}.$(hostname -d)^[[m"
+echo -e "\t💡  ^[[m^[[33m IP Address: ^[[1;92m$(hostname -I)^[[m"

@@ -1,0 +1,154 @@
+.\" Man page for blockman.sh
+.TH blockman 1 "July 02, 2025" "Version 1.0.0" "User Commands"
+.SH NAME
+blockman \- manage named shell script blocks in config files
+.SH SYNOPSIS
+.B blockman
+[\fB--file\fR \fIFILE\fR | \fB-s\fR \fIFILE\fR]
+[\fB--body\fR \fISTR\fR | \fB-b\fR \fISTR\fR | \fB--contentFile\fR \fIFILE\fR]
+[\fB--append\fR | \fB-a\fR]
+[\fB--transform\fR \fICOMMAND\fR]
+[\fB--show\fR | \fB--list\fR]
+[\fB--extract\fR]
+[\fB--check\fR]
+[\fB--dry-run\fR]
+[\fB--format\fR \fIFORMAT\fR]
+[\fB--comment-prefix\fR \fIPREFIX\fR]
+[\fB--version\fR]
+[\fB--help\fR]
+[\fIBLOCK_ID\fR]
+.SH DESCRIPTION
+.B blockman
+is a shell script for managing named blocks of text, typically shell script snippets, within configuration files. It supports operations like inserting, removing, appending to, transforming, and extracting these named blocks.
+
+Each block is identified by a unique ID and is delimited by comments, e.g., "# BEGIN my_block_id" and "# END my_block_id". The comment prefix itself is configurable.
+
+All actions performed by \fBblockman\fR are logged to a file within \fB/var/log/blockman/\fR (or a configurable path), and a diff is output to stdout by default for modifications. Log format can be either plain text or JSON.
+.SH OPTIONS
+.TP
+\fB--file\fR \fIFILE\fR, \fB--in\fR \fIFILE\fR, \fB--inFile\fR \fIFILE\fR, \fB-s\fR \fIFILE\fR
+Specify the configuration file to operate on. This is a required option for most operations.
+.TP
+\fB--body\fR \fISTR\fR, \fB--content\fR \fISTR\fR, \fB--block\fR \fISTR\fR, \fB-b\fR \fISTR\fR, \fB-c\fR \fISTR\fR
+Provide the content (body) for a block directly as a string. If the block does not exist, it will be created. If it exists, its content will be replaced unless \fB--append\fR is used.
+.TP
+\fB--contentFile\fR \fIFILE\fR, \fB--blockFile\fR \fIFILE\fR, \fB--bodyFile\fR \fIFILE\fR
+Provide the content (body) for a block from the specified file. Similar behavior to \fB--body\fR regarding creation or replacement.
+.TP
+\fB--append\fR, \fB-a\fR
+Used in conjunction with \fB--body\fR or \fB--contentFile\fR. If the block already exists, the new content will be appended to its existing content instead of replacing it.
+.TP
+\fB--transform\fR \fICOMMAND\fR
+Apply a shell command or pipeline to the content of an existing block. The block's content is piped to \fICOMMAND\fR, and the output of \fICOMMAND\fR replaces the block's content.
+.TP
+\fB--show\fR, \fB--list\fR
+Display the content of the specified block ID to stdout. No modifications are made.
+.TP
+\fB--extract\fR
+Display the content of the specified block ID to stdout, and then remove the block (including its start/end markers) from the file.
+.TP
+\fB--check\fR
+Check the integrity of blocks within the file (e.g., unclosed blocks).
+.TP
+\fB--dry-run\fR
+Perform all operations without making any actual changes to the file system. Output the proposed changes to stdout.
+.TP
+\fB--format\fR \fIFORMAT\fR
+Specify the log output format. Currently supports \fBplain\fR (default) or \fBjson\fR.
+.TP
+\fB--comment-prefix\fR \fIPREFIX\fR
+Specify the character(s) to be used as the comment prefix for block markers (e.g., \fB#\fR or \fB//\fR). This overrides the \fBBLOCKMAN_COMMENT_CHAR\fR setting from configuration files for the current command execution.
+.TP
+\fB--version\fR
+Display the version of \fBblockman\fR.
+.TP
+\fB--help\fR, \fB-h\fR, \fI-?\fR
+Display a help message and exit.
+.TP
+\fIBLOCK_ID\fR
+The unique identifier for the block to operate on. If omitted for \fI*rc\fR or \fI*profile\fR files, it defaults to an uppercase version of the filename (e.g., \fI.bashrc\fR becomes \fIBASHRC_D\fR). Required for other file types.
+.SH CONFIGURATION
+.B blockman
+reads its configuration from two main files, applied in the following order:
+.RS
+.TP
+\fB1. /etc/default/blockman\fR
+The system-wide default configuration file. Variables set here define the system-wide policy.
+.IP
+.B Important:
+If \fBENABLE_SYSLOG\fR, \fBBLOCKMAN_LOG_BASE_DIR\fR, or \fBLOG_FORMAT\fR are defined in this file, their values are enforced as system policy and cannot be overridden by user-specific configurations or command-line arguments.
+.TP
+\fB2. ~/.config/blockman.conf\fR (or path specified by \fBBBLOCKMAN_USER_CONFIG\fR environment variable)
+The user-specific configuration file. Settings here override those in \fB/etc/default/blockman\fR, except for the policy-enforced variables mentioned above.
+.RE
+.PP
+The following variables can be configured within these files:
+.TP
+\fBSTART_KEYWORDS\fR
+A pipe-separated list of keywords (e.g., "START|BEGIN") used to identify the beginning of a block marker. Default: "START|BEGIN|HEAD".
+.TP
+\fBEND_KEYWORDS\fR
+A pipe-separated list of keywords (e.g., "END|FINISH") used to identify the end of a block marker. Default: "END|FINISH|TAIL".
+.TP
+\fBBLOCKMAN_COMMENT_CHAR\fR
+The character(s) used as a comment prefix for block markers (e.g., "#" or "//"). Default: "#". This can also be overridden for a single command using the \fB--comment-prefix\fR option.
+.TP
+\fBBLOCKMAN_LOG_BASE_DIR\fR
+The base directory where blockman will store its log files. Default: "/var/log/blockman".
+.TP
+\fBLOG_FORMAT\fR
+The format of the log entries. Supported values are "plain" (default) or "json".
+.TP
+\fBENABLE_SYSLOG\fR
+Set to "1" to enable syslog integration for logging actions, or "0" to disable (default). Requires the `logger` command to be available on the system.
+.SH FILES
+.TP
+\fB/etc/default/blockman\fR
+System-wide configuration file. See \fBCONFIGURATION\fR section for details on policy enforcement.
+.TP
+\fB~/.config/blockman.conf\fR
+User-specific configuration file. Can be overridden by the \fBBBLOCKMAN_USER_CONFIG\fR environment variable. See \fBCONFIGURATION\fR section.
+.TP
+\fB/var/log/blockman/\fR
+Default directory for blockman log files. This can be configured via \fBBLOCKMAN_LOG_BASE_DIR\fR.
+.SH EXIT STATUS
+.TP
+\fB0\fR (\fBSUCCESS\fR)
+The command completed successfully.
+.TP
+\fB1\fR (\fBERR_GENERAL\fR)
+A general or unspecified error occurred.
+.TP
+\fB2\fR (\fBERR_INVALID_ARG\fR)
+An invalid or missing command-line argument was provided (e.g., missing \fB--file\fR, unexpected argument).
+.TP
+\fB3\fR (\fBERR_FILE_NOT_FOUND\fR)
+The specified input file does not exist.
+.TP
+\fB4\fR (\fBERR_PERMISSION_DENIED\fR)
+The script lacks necessary read or write permissions for the specified file.
+.TP
+\fB5\fR (\fBERR_BLOCK_NOT_FOUND\fR)
+An operation requiring an existing block (e.g., \fB--transform\fR or \fB--extract\fR) was attempted, but the specified block ID was not found in the file.
+.TP
+\fB7\fR (\fBERR_BLOCK_INTEGRITY\fR)
+The block integrity check (\fB--check\fR) found issues such as unclosed blocks, nested or duplicate start markers, or unmatched end markers.
+.TP
+\fB8\fR (\fBERR_TRANSFORM_FAILED\fR)
+The command or pipeline provided to \fB--transform\fR failed (returned a non-zero exit code).
+.TP
+\fB9\fR (\fBERR_LOGGING\fR)
+The script encountered an issue related to logging (e.g., unable to create the log directory).
+.SH SEE ALSO
+.BR sh(1),
+.BR sed(1),
+.BR awk(1),
+.BR diff(1),
+.BR mktemp(1)
+.SH BUGS
+Report bugs to <your-email@example.com>
+.SH AUTHORS
+Your Name <your-email@example.com>
+.SH COPYRIGHT
+Copyright (c) 2025, Your Name. Licensed under the MIT License.
+.\" END of Man page for blockman.sh

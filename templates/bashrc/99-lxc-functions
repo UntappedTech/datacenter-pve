@@ -1,0 +1,155 @@
+
+# Github Repository (developer/repo-name)
+export GH_REPO=''
+# Command to check the packge's current version
+export VERSION_CMD=''
+newer_release () {
+    if [[ -z "$GH_REPO"  || -z "$VERSION_CMD" ]]; then
+	echo "Ensure both the GH_REPO and VERSION_CMD variables are populated"
+	return 1
+    fi
+
+    LATEST_RELEASE_JSON=$(curl -s "https://api.github.com/repos/${GH_REPO}/tags?per_page=1")
+    LATEST_RELEASE=$(echo $LATEST_RELEASE_JSON | jq .[].name )
+
+#    echo -e "Got GH: $LATEST_RELEASE and \"$VERSION_CMD\""
+    if [[ $LATEST_RELEASE =~ \"$VERSION_CMD\" ]]; then
+	echo -e "Update Available: $VERSION_CMD => $LATEST_RELEASE"
+    else
+	echo -e "No Updates. Current version: $VERSION_CMD"
+    fi
+
+    return $([[ $LATEST_RELEASE =~ \"$VERSION_CMD\" ]])
+}
+
+#!/bin/bash
+# ==============================================================================
+# GitHub Release Checker Function
+#
+# Description:
+# A POSIX-compliant shell function to check if a newer version of a tool
+# exists on GitHub compared to a locally installed version.
+#
+# It is designed to be sourced and used in other scripts. It relies on
+# the GITHUB_REPOSITORY and LOCAL_VERSION_COMMAND environment variables
+# being set before calling.
+#
+# Dependencies:
+# - curl: To make API requests to GitHub.
+# - jq: To parse the JSON response from the GitHub API.
+#
+# Improvements:
+# - Performs a proper version-aware comparison using `sort -V`.
+# - Uses standard exit codes (0 for newer, 1 for not newer).
+# - Sends informational logs to stderr and primary output (the new version)
+#   to stdout, making it pipeline-friendly.
+# ==============================================================================
+
+# --- Placeholders ---
+# These variables are intended to be populated on the target system or before
+# this script is sourced/run.
+
+# The GitHub repository in "owner/repo" format.
+# <<======>> BEGIN REPO <<=======>>
+export GITHUB_REPOSITORY=''
+# <<======>> END REPO   <<=======>>
+
+# The command to execute to get the current local version string.
+# <<======>> BEGIN VERSION <<=======>>
+export LOCAL_VERSION_COMMAND=''
+# <<======>> END VERSION   <<=======>>
+
+
+# newer_release
+#
+# Checks for a newer release using the global GITHUB_REPOSITORY and
+# LOCAL_VERSION_COMMAND variables.
+# @returns {int} - Exit code 0 if a newer version is available, 1 otherwise.
+# @stdout - The latest version string if a newer version is available.
+# @stderr - Informational and error messages.
+newer_release() {
+    # --- Input Validation ---
+    if [[ -z "$GITHUB_REPOSITORY" || -z "$LOCAL_VERSION_COMMAND" ]]; then
+        echo "ERROR: GITHUB_REPOSITORY and LOCAL_VERSION_COMMAND variables must be set." >&2
+        return 2 # Use a different exit code for invalid usage
+    fi
+
+    # --- Dependency Check ---
+    if ! command -v curl &> /dev/null || ! command -v jq &> /dev/null; then
+        echo "ERROR: 'curl' and 'jq' are required dependencies." >&2
+        return 2
+    fi
+
+    # --- Fetch and Parse Versions ---
+    echo "INFO: Checking for newer release of '$GITHUB_REPOSITORY'..." >&2
+
+    # Fetch the latest tag from the GitHub API
+    local LATEST_RELEASE_JSON
+    LATEST_RELEASE_JSON=$(curl -s "https://api.github.com/repos/${GITHUB_REPOSITORY}/tags?per_page=1")
+    if [[ -z "$LATEST_RELEASE_JSON" ]]; then
+        echo "ERROR: Failed to fetch release data from GitHub for '$GITHUB_REPOSITORY'." >&2
+        return 2
+    fi
+
+    # Safely parse the tag name from the JSON response
+    local LATEST_VERSION
+    LATEST_VERSION=$(echo "$LATEST_RELEASE_JSON" | jq -r '.[0].name')
+    if [[ -z "$LATEST_VERSION" || "$LATEST_VERSION" == "null" ]]; then
+        echo "ERROR: Could not parse release version from GitHub API response." >&2
+        return 2
+    fi
+
+    # Execute the local version command to get the current version
+    local CURRENT_VERSION
+    CURRENT_VERSION=$(eval "$LOCAL_VERSION_COMMAND")
+    if [[ -z "$CURRENT_VERSION" ]]; then
+        echo "ERROR: Failed to get current version using command: '$LOCAL_VERSION_COMMAND'" >&2
+        return 2
+    fi
+
+    # --- Compare Versions ---
+
+    # Normalize versions by removing a potential leading 'v'
+    local NORMALIZED_LATEST=${LATEST_VERSION#v}
+    local NORMALIZED_CURRENT=${CURRENT_VERSION#v}
+
+    if [[ "$NORMALIZED_LATEST" == "$NORMALIZED_CURRENT" ]]; then
+        echo "INFO: You have the latest version: $CURRENT_VERSION" >&2
+        return 1 # Not newer
+    fi
+
+    # Use `sort -V` to find the highest version number
+    local HIGHEST_VERSION
+    HIGHEST_VERSION=$(printf "%s\n%s" "$NORMALIZED_LATEST" "$NORMALIZED_CURRENT" | sort -V | tail -n 1)
+
+    if [[ "$HIGHEST_VERSION" == "$NORMALIZED_LATEST" ]]; then
+        echo "INFO: A newer version is available: $CURRENT_VERSION -> $LATEST_VERSION" >&2
+        echo "$LATEST_VERSION" # Print the new version to stdout
+        return 0 # Newer
+    else
+        echo "INFO: Your local version ($CURRENT_VERSION) appears newer than the latest tag ($LATEST_VERSION). No update needed." >&2
+        return 1 # Not newer
+    fi
+}
+
+# --- USAGE EXAMPLES ---
+#
+# Example 1: Check for a new version of 'eza' and act on it.
+#
+# export GITHUB_REPOSITORY="eza-community/eza"
+# export LOCAL_VERSION_COMMAND="eza --version | cut -d' ' -f2"
+# if newer_release; then
+#     echo "A new version of eza is available! Time to upgrade."
+# else
+#     echo "eza is up to date."
+# fi
+#
+# Example 2: Capture the latest version in a variable.
+#
+# export GITHUB_REPOSITORY="eza-community/eza"
+# export LOCAL_VERSION_COMMAND="eza --version | cut -d' ' -f2"
+# LATEST_EZA=$(newer_release)
+# if [ $? -eq 0 ]; then
+#     echo "A new version of eza was found: $LATEST_EZA"
+#     # ... add download/install logic here ...
+# fi
