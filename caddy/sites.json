@@ -1,34 +1,164 @@
-{
-    "untapped.tech": {
-        "redirects_from": [
-            "untapped.cloud",
-            "untapped.codes",
-            "untappedtechnologies.com"
+[
+    {
+        "domains": [
+            "old-homelab-domain.org",
+            "legacy-cluster-site.net"
         ],
-        "fallback_handler": "root * /srv/untapped\nencode gzip zstd\ntemplates\nrewrite *.html /index.html\nfile_server",
+        "redirect_to": "example-homelab.com"
+    },
+    {
+        "domains": [
+            "example-homelab.com",
+            "example-homelab.net"
+        ],
+        "log": true,
+        "fallback_handler": [
+            "import global_security_headers",
+            "import caching",
+            "import serve_html /srv/example-homelab/default"
+        ],
         "services": {
-            "home": {
-                "hostnames": ["home"],
-                "custom_handler": "root * /srv/untapped\nencode gzip zstd\ntemplates\nrewrite *.md /index.html\nfile_server browse"
+            "heimdall-dashboard": {
+                "enabled": true,
+                "hostnames": [
+                    "dashboard",
+                    "portal"
+                ],
+                "import": [
+                    "caching",
+                    "serve_php /srv/heimdall"
+                ]
             },
-            "uptime": {
-                "hostnames": ["uptime"],
+            "home-assistant": {
+                "enabled": true,
+                "hostnames": [
+                    "homeassistant",
+                    "ha"
+                ],
                 "proxy_target": {
-                    "protocol": "",
-                    "host_address": "10.0.0.100",
-                    "port": "3001"
+                    "protocol": "https://",
+                    "host_address": "192.168.1.100",
+                    "port": 8123
                 },
-                "proxy_mixin": "proxy_opts_default"
+                "import": [
+                    "proxy_opts_tls_skip"
+                ]
+            },
+            "adguard-home": {
+                "enabled": true,
+                "hostnames": [
+                    "adguard",
+                    "dns"
+                ],
+                "proxy_target": {
+                    "host_address": "192.168.1.101",
+                    "port": 3000
+                },
+                "import": [
+                    "proxy_opts_default"
+                ]
+            },
+            "jellyfin": {
+                "enabled": true,
+                "hostnames": [
+                    "jellyfin",
+                    "watch",
+                    "stream",
+                    "media"
+                ],
+                "proxy_target": {
+                    "protocol": "http://",
+                    "host_address": "192.168.1.102",
+                    "port": 8096
+                }
+            },
+            "scrypted-nvr": {
+                "enabled": true,
+                "hostnames": [
+                    "scrypted",
+                    "cams"
+                ],
+                "proxy_target": {
+                    "protocol": "https://",
+                    "host_address": "192.168.1.103",
+                    "port": 10443
+                },
+                "import": [
+                    "proxy_opts_tls_skip"
+                ]
+            },
+            "uptime-kuma": {
+                "enabled": false,
+                "hostnames": [
+                    "uptime",
+                    "status"
+                ],
+                "proxy_target": {
+                    "host_address": "192.168.1.104",
+                    "port": 3001
+                },
+                "import": [
+                    "proxy_opts_default"
+                ]
+            },
+            "immich-photos-ipv6": {
+                "enabled": true,
+                "hostnames": [
+                    "immich",
+                    "photos"
+                ],
+                "proxy_target": {
+                    "host_address": "2001:db8:85a3::8a2e:370:7334",
+                    "port": 2283
+                }
+            },
+            "overseerr-requests-ipv6-naked": {
+                "enabled": true,
+                "hostnames": [
+                    "overseerr",
+                    "request"
+                ],
+                "proxy_target": {
+                    "host_address": "2001:db8:85a3::8a2e:370:7335"
+                }
+            },
+            "pve-node-proxy": {
+                "enabled": true,
+                "hostnames": [
+                    "pve"
+                ],
+                "proxy_target": {
+                    "protocol": "https://",
+                    "host_address": "pve-node-01.local",
+                    "port": 8006
+                },
+                "import": [
+                    "proxy_opts_tls_skip"
+                ]
+            },
+            "custom-block-handler": {
+                "enabled": true,
+                "hostnames": [
+                    "assets",
+                    "static-files"
+                ],
+                "handler": [
+                    "root * /srv/example-homelab/assets",
+                    "encode zstd",
+                    "file_server"
+                ]
+            },
+            "stealth-service-no-logs": {
+                "enabled": true,
+                "log": false,
+                "hostnames": [
+                    "stealth"
+                ],
+                "proxy_target": {
+                    "host_address": "192.168.1.110",
+                    "port": 9000
+                }
             }
         }
-    },
-    "etherealprince.com": {
-        "redirects_from": [
-            "etherealprince.love",
-            "etherealprince.me",
-            "etherealprince.online"
-        ],
-        "fallback_handler": "root * /srv/etherealprince\nencode gzip zstd\ntemplates\nrewrite *.html /index.html\nfile_server",
-        "services": {}
     }
-}
+]

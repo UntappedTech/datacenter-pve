@@ -1,282 +1,409 @@
 #!/bin/bash
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Configuration
-# ──────────────────────────────────────────────────────────────────────────────
-# This script reads a monolithic JSON config and generates a complete,
-# self-contained Caddyfile for each primary apex domain defined within.
+# Caddyfile Generator (JSON + jq + array-based handlers)
+#
+# This script reads a JSON configuration describing apex domains, services,
+# handlers, and redirect rules, then generates a complete Caddyfile for each
+# apex domain. It is designed for:
+#   - Deterministic output
+#   - Safe JSON parsing via jq
+#   - Array-based handler blocks (no multiline string issues)
+#   - Strict indentation via indent_block()
+#
+# Output files are written to:
+#   /etc/caddy/conf.d/<apex>.site
 #
 # Usage:
-#   To generate Caddyfiles: ./subdomain_generator.sh [path_to_config_file]
-#   To sort the config file: ./subdomain_generator.sh --sort [path_to_config_file]
+#   ./create_sites.sh
+#   ./create_sites.sh /path/to/sites.json
 # ──────────────────────────────────────────────────────────────────────────────
 
-# Base directory for Caddy configurations.
+set -euo pipefail
+IFS=$'\n\t'
+
 CADDY_CONF_DIR="/etc/caddy"
-# Default config file path.
 DEFAULT_CONFIG_FILE="${CADDY_CONF_DIR}/sites.json"
-# Template for the output filename. Use {apex_domain} as a placeholder.
 OUTPUT_FILENAME_TEMPLATE="${CADDY_CONF_DIR}/conf.d/{apex_domain}.site"
+LOG_SNIPPET="slog"
+
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Script Logic
+# Helper Functions
 # ──────────────────────────────────────────────────────────────────────────────
 
-set -e
-
-# --- Helper Functions ---
-
-# Indents a multi-line string by a given level.
-# $1: The string content to indent.
-# $2: The indentation level (integer, e.g., 1 for 4 spaces, 2 for 8).
+# indent_block(content, level)
+# --------------------------------
+# Indents each line of a block by N indentation levels (4 spaces each).
+# This ensures consistent formatting throughout generated Caddyfiles.
+#
+# Arguments:
+#   $1 - content (string or multi-line)
+#   $2 - indentation level (integer)
 indent_block() {
     local content="$1"
     local level="$2"
-    local indent=""
-    for ((i=0; i<level; i++)); do
-        indent+="    "
-    done
-    # Use sed to prepend the indentation to each line.
-    echo "$content" | sed "s|^|${indent}|"
+    local indent
+    indent=$(printf '%*s' $((level * 4)) '')
+
+    while IFS= read -r line; do
+        printf '%s%s\n' "$indent" "$line"
+    done <<< "$content"
 }
 
-# Creates and prints the final fallback handler block.
-# $1: The APEX_DOMAIN name.
-# $2: The custom fallback content from the config (can be empty).
-create_fallback_handler() {
-    local APEX_DOMAIN="$1"
-    local custom_fallback_content="$2"
+# check_for_collisions(file)
+# --------------------------------
+# Ensures no hostname (apex or subdomain) appears more than once across all
+# active, enabled configuration blocks. This prevents Caddy from rejecting the configuration.
+#
+# Extracts:
+#   - Apex domains
+#   - Active service hostnames expanded to FQDNs
+check_for_collisions() {
+    local file="$1"
+    echo "🔍 Verifying hostname integrity..."
 
-    if [ -n "$custom_fallback_content" ]; then
-        cat <<EOF
+    local all_hosts
+    all_hosts=$(jq -r '
+        .[] as $blk |
+        $blk.domains[] as $d |
+        (
+            $d,
+            ($blk.services[]? | select(.enabled != false) | .hostnames[]? | select(. != $d) | . + "." + $d)
+        )
+    ' "$file")
 
-    # Fallback Handler
-    handle {
-$(indent_block "$custom_fallback_content" 2)
-    }
-EOF
-    else
-        cat <<EOF
+    local dups
+    dups=$(echo "$all_hosts" | sort | uniq -d)
 
-    # Default Handler
-    handle {
-        redir https://home.${APEX_DOMAIN}
-    }
-EOF
+    if [[ -n "$dups" ]]; then
+        echo "❌ Collision Error: Duplicate hostnames detected:" >&2
+        echo "$dups" | sed 's|^|  - |' >&2
+        exit 1
     fi
+
+    echo "✅ Integrity check passed."
 }
 
-# Sorts the JSON configuration file in-place.
-# $1: The path to the configuration file to sort.
+# sort_config_file(file)
+# --------------------------------
+# Sorts services inside each block by:
+#   1. IP address (numerically)
+#   2. Port number
+#   3. Key name (alphabetically) - guarantees stable ordering for static handlers
+#
+# This ensures deterministic output and reduces diff noise.
+# This implementation categorizes and sorts host types safely:
+#   - Class 1: IPv4 addresses (sorted numerically)
+#   - Class 2: IPv6 addresses (sorted alphabetically)
+#   - Class 3: DNS Hostnames (sorted alphabetically)
 sort_config_file() {
-    local file_to_sort="$1"
-    echo "🔄 Sorting services in '$file_to_sort' by IP address and port..."
-    
-    local tmp_file
-    tmp_file=$(mktemp)
-    
-    # This robust jq command correctly sorts services numerically by host_address and then port.
-    local sort_command='
-        with_entries(
-            # For each domain, if it has a non-empty services object...
-            if .value.services and (.value.services | length) > 0 then
-                .value.services |= (
+    local file="$1"
+    echo "🔄 Sorting services by network address..."
+
+    local sort_cmd='
+        map(
+            if .services then
+                .services |= (
                     to_entries
                     | sort_by(
-                        # Create a single, flat array for the sort key: [oct1, oct2, oct3, oct4, port]
                         (
-                            (.value.proxy_target.host_address // "0.0.0.0")
-                            | split(".")
-                            | map(try tonumber catch 0)
+                            .value.proxy_target.host_address // ""
+                            | if (contains(".") and test("^[0-9.]+$")) then
+                                [1] + (split(".") | map(try tonumber catch 0))
+                              elif contains(":") then
+                                [2, .]
+                              else
+                                [3, .]
+                              end
                         )
-                        + # Add the port to the array
-                        [
-                            (.value.proxy_target.port // "0")
-                            | try tonumber catch 0
-                        ]
-                      )
+                        + [(.value.proxy_target.port // "0" | try tonumber catch 0)]
+                        + [.key]
+                    )
                     | from_entries
                 )
-            else
-                # If no services or an empty services object, leave the entry unchanged.
-                .
-            end
+            else . end
         )
     '
-    
-    if jq --indent 4 "$sort_command" "$file_to_sort" > "$tmp_file"; then
-        # Atomically replace the old file with the sorted one
-        mv "$tmp_file" "$file_to_sort"
-        echo "✅ Successfully sorted '$file_to_sort'."
+
+    local tmp
+    tmp=$(mktemp)
+
+    if jq --indent 4 "$sort_cmd" "$file" > "$tmp"; then
+        mv "$tmp" "$file"
     else
-        echo "❌ Error: Failed to sort JSON file. Check for syntax errors." >&2
-        rm -f "$tmp_file"
+        echo "❌ Sorting failed; original file preserved." >&2
+        rm -f "$tmp"
         exit 1
     fi
 }
 
-# --- Argument Parsing & Pre-flight Checks ---
-if [[ "$1" == "--sort" ]]; then
-    CONFIG_FILE="${2:-$DEFAULT_CONFIG_FILE}"
-    if [ ! -f "$CONFIG_FILE" ]; then echo "❌ Error: Config file not found at '$CONFIG_FILE'" >&2; exit 1; fi
-    sort_config_file "$CONFIG_FILE"
-    exit 0
-fi
 
-# Default behavior: Generation
-CONFIG_FILE="${1:-$DEFAULT_CONFIG_FILE}"
+# ──────────────────────────────────────────────────────────────────────────────
+# Generator Functions
+# ──────────────────────────────────────────────────────────────────────────────
 
-if ! command -v jq &> /dev/null; then echo "❌ Error: 'jq' is not installed." >&2; exit 1; fi
-if [ ! -f "$CONFIG_FILE" ]; then echo "❌ Error: Config file not found at '$CONFIG_FILE'" >&2; exit 1; fi
-mkdir -p "$(dirname "$OUTPUT_FILENAME_TEMPLATE")"
+# generate_redirect_block(domain, target)
+# --------------------------------
+# Generates a redirect-only Caddyfile block for domains that forward to another.
+# Includes:
+#   - Apex redirect
+#   - Wildcard redirect using {labels.0}
+generate_redirect_block() {
+    local DOMAIN="$1"
+    local TARGET="$2"
 
-check_for_conflicts() {
-    local redirect_sources
-    redirect_sources=$(jq -r '[.[] | .redirects_from[]? | select(. != null)] | .[]' "$CONFIG_FILE")
-    local primary_domains
-    primary_domains=$(jq -r 'keys[]' "$CONFIG_FILE")
-    for domain in $redirect_sources; do
-        if [[ " ${primary_domains[*]} " =~ " ${domain} " ]]; then
-            echo "❌ Config Conflict: '${domain}' is in a 'redirects_from' list but is also a primary apex domain." >&2
-            exit 1
-        fi
-    done
-}
-check_for_conflicts
-
-# --- Main Generator Function ---
-generate_content_for_apex() {
-    local APEX_DOMAIN="$1"
-
-    # --- Header ---
     cat <<EOF
-# This file is automatically generated for the '${APEX_DOMAIN}' apex domain.
-# It contains the full site block configuration for this domain and any
-# associated redirects.
+# Wildcard Redirect Configuration
+# ${DOMAIN} -> ${TARGET}
+
+${DOMAIN}, *.${DOMAIN} {
+    tls /certs/${DOMAIN}.fullchain.pem /certs/${DOMAIN}.private.key.pem
+
+    @subdomain host *.${DOMAIN}
+    handle @subdomain {
+$(indent_block "redir https://{labels.2}.${TARGET}{uri}" 2)
+$(indent_block "}" 1)
+
+    handle {
+$(indent_block "redir https://${TARGET}{uri}" 2)
+$(indent_block "}" 1)
+}
+EOF
+}
+
+# generate_site_block(site_json, apex_domain)
+# --------------------------------
+# Generates a full Caddyfile site block for a domain with services.
+# Handles:
+#   - TLS
+#   - Path-to-subdomain redirects
+#   - Custom handlers (array-based)
+#   - Reverse proxy handlers
+#   - Dynamic Root Imports
+#   - Fallback handler
+generate_site_block() {
+    local SITE_JSON="$1"
+    local APEX_DOMAIN="$2"
+
+    cat <<EOF
+# Generated Site Configuration for: ${APEX_DOMAIN}
 # Generated on: $(date)
 
-EOF
-
-    # --- TLD Redirects ---
-    local redirect_domains
-    redirect_domains=$(jq -r --arg apex "$APEX_DOMAIN" '.[$apex].redirects_from[]? // ""' "$CONFIG_FILE")
-    if [ -n "$redirect_domains" ]; then
-        echo "# TLD Redirects"
-        echo
-        for domain in $redirect_domains; do
-            cat <<EOF
-${domain}, *.$domain {
-    tls /certs/${domain}.fullchain.pem /certs/${domain}.private.key.pem
-    redir https://${APEX_DOMAIN}{uri}
-}
-
-EOF
-        done
-    fi
-
-    # --- Main Block Start ---
-    cat <<EOF
-# ------------------------------------------------------------------------------
-# Main Apex Block for ${APEX_DOMAIN}
-# ------------------------------------------------------------------------------
 *.${APEX_DOMAIN}, ${APEX_DOMAIN} {
     tls /certs/${APEX_DOMAIN}.fullchain.pem /certs/${APEX_DOMAIN}.private.key.pem
-#    import block_non_en_us
 EOF
 
-    # --- Path-to-Subdomain Redirects ---
-    local path_redirects
-    path_redirects=$(jq -r --arg apex "$APEX_DOMAIN" '[.[$apex].services[]? | ((.redirect_paths? | select(length > 0)) // .hostnames)[] | select(. != "")] | unique | join("|")' "$CONFIG_FILE")
-    if [ -n "$path_redirects" ]; then
-        cat <<EOF
+    # Build regex for path-based redirects (only pulling from active/enabled services)
+    local path_regex
+    path_regex=$(echo "$SITE_JSON" | jq -r '
+        [.services[]? |
+            select(.enabled != false) |
+            ((.redirect_paths? | select(length > 0)) // .hostnames)[] |
+            select(. != "")
+        ] | unique | join("|")
+    ')
 
-    # Secure Path-to-Subdomain Redirects
-    @path_to_subdomain path_regexp ^/(${path_redirects})\$
-    redir @path_to_subdomain https://{re.1}.${APEX_DOMAIN}
-EOF
+    if [[ -n "$path_regex" ]]; then
+        echo
+        indent_block "@path_to_subdomain path_regexp ^/(${path_regex})(/.*)?\$" 1
+        indent_block "redir @path_to_subdomain https://{re.1}.${APEX_DOMAIN}{re.2}" 1
     fi
 
-    # --- Service Handlers ---
-    echo
-    echo "    # --- Service Handlers (sorted by IP address) ---"
+    # Iterate through services
     local services
-    services=$(jq -r --arg apex "$APEX_DOMAIN" '.[$apex].services | keys[]?' "$CONFIG_FILE")
-    
+    services=$(echo "$SITE_JSON" | jq -r '.services // {} | keys[]?')
+
     for service in $services; do
-        local service_json
-        service_json=$(jq -c --arg apex "$APEX_DOMAIN" --arg svc "$service" '.[$apex].services[$svc]' "$CONFIG_FILE")
-        
+        local svc_cfg
+        svc_cfg=$(echo "$SITE_JSON" | jq -c --arg svc "$service" '.services[$svc]')
+
+        # Skip generating service block if explicitly disabled (safe from jq boolean coercion)
+        local enabled
+        enabled=$(echo "$svc_cfg" | jq -r '.enabled != false')
+        if [[ "$enabled" == "false" ]]; then
+            continue
+        fi
+
+        # Check if log is enabled (defaults to true; safe from jq boolean coercion)
+        local service_log
+        service_log=$(echo "$svc_cfg" | jq -r '.log != false')
+
         local host_list
-        host_list=$(jq -r --arg apex_domain ".${APEX_DOMAIN}" '.hostnames | map(. + $apex_domain) | join(" ")' <<< "$service_json")
-        local custom_handler
-        custom_handler=$(jq -r '.custom_handler // ""' <<< "$service_json")
+        host_list=$(echo "$svc_cfg" | jq -r --arg apex ".${APEX_DOMAIN}" '.hostnames | map(. + $apex) | join(" ")')
 
-        if [ -n "$custom_handler" ]; then
-            cat <<EOF
+        local handler_lines
+        handler_lines=$(echo "$svc_cfg" | jq -r '.handler[]?')
 
-    # Custom handler for ${service}
-    @${service} host ${host_list}
-    handle @${service} {
-$(indent_block "$custom_handler" 2)
-    }
-EOF
+        local svc_imports
+        svc_imports=$(echo "$svc_cfg" | jq -r '.import[]?')
+
+        # Assemble log line if logging is requested (maps cleanly to service.domain log outputs)
+        local log_line=""
+        if [[ "$service_log" == "true" ]]; then
+            log_line="import ${LOG_SNIPPET} ${service}.${APEX_DOMAIN}"
+        fi
+
+        # Inspect if a proxy_target configuration object exists
+        local has_proxy
+        has_proxy=$(echo "$svc_cfg" | jq -r 'if .proxy_target then "true" else "false" end')
+
+        # Case A: Reverse Proxy routing configuration is present
+        if [[ "$has_proxy" == "true" ]]; then
+            local proto addr port
+            proto=$(echo "$svc_cfg" | jq -r '.proxy_target.protocol // "http://"')
+            addr=$(echo "$svc_cfg" | jq -r '.proxy_target.host_address // ""')
+            port=$(echo "$svc_cfg" | jq -r '.proxy_target.port // empty')
+
+            # Strip existing square brackets if they were already pre-wrapped in the config file
+            local clean_addr="${addr#[}"
+            clean_addr="${clean_addr%]}"
+
+            # Handle IPv6 Addresses safely: always wrap in brackets if the address contains colons (IPv6)
+            local full_proxy
+            if [[ "$clean_addr" =~ : ]]; then
+                full_proxy="${proto}[${clean_addr}]${port:+:$port}"
+            else
+                full_proxy="${proto}${clean_addr}${port:+:$port}"
+            fi
+
+            echo
+            indent_block "@${service} host ${host_list}" 1
+            if [[ -n "$log_line" ]]; then
+                indent_block "$log_line" 1
+            fi
+            indent_block "handle @${service} {" 1
+
+            # Cleanly render single-line proxy or block mapping depending on snippet inclusion
+            if [[ -n "$svc_imports" ]]; then
+                indent_block "reverse_proxy ${full_proxy} {" 2
+                while IFS= read -r snippet; do
+                    if [[ -n "$snippet" ]]; then
+                        indent_block "import $snippet" 3
+                    fi
+                done <<< "$svc_imports"
+                indent_block "}" 2
+            else
+                indent_block "reverse_proxy ${full_proxy}" 2
+            fi
+
+            indent_block "}" 1
+
+        # Case B: Custom Handlers and/or Snippet Imports are used (No proxy directive present)
         else
-            # Reconstruct the full proxy address from the structured object
-            local protocol
-            protocol=$(jq -r '.proxy_target.protocol // ""' <<< "$service_json")
-            local host_address
-            host_address=$(jq -r '.proxy_target.host_address // ""' <<< "$service_json")
-            local port
-            port=$(jq -r '.proxy_target.port // ""' <<< "$service_json")
-            
-            local full_proxy_address="${protocol}${host_address}"
-            if [ -n "$port" ]; then
-                full_proxy_address+=":${port}"
+            echo
+            indent_block "@${service} host ${host_list}" 1
+            if [[ -n "$log_line" ]]; then
+                indent_block "$log_line" 1
+            fi
+            indent_block "handle @${service} {" 1
+
+            # Print service-level snippet imports inside the handle block if defined
+            if [[ -n "$svc_imports" ]]; then
+                while IFS= read -r snippet; do
+                    if [[ -n "$snippet" ]]; then
+                        indent_block "import $snippet" 2
+                    fi
+                done <<< "$svc_imports"
             fi
 
-            local mixin_name
-            mixin_name=$(jq -r '.proxy_mixin // ""' <<< "$service_json")
-            
-#    import proxy_service ${full_proxy_address} ${service}.${APEX_DOMAIN} "${mixin_name}" ${host_list}
-            cat <<EOF
-
-$(indent_block  "@${service} host ${host_list}" 1)
-$(indent_block "handle @${service} {" 1)
-$(indent_block "reverse_proxy ${full_proxy_address} {" 2)
-EOF
-            if [ -n "$mixin_name" ]; then
-                cat <<EOF
-$(indent_block "import ${mixin_name}" 3)
-EOF
+            # Print custom handler lines inside the handle block if defined
+            if [[ -n "$handler_lines" ]]; then
+                while IFS= read -r line; do
+                    indent_block "$line" 2
+                done <<< "$handler_lines"
             fi
-            cat <<EOF
-$(indent_block "}" 2)
-$(indent_block "}" 1)
-EOF
+
+            indent_block "}" 1
         fi
     done
 
-    # --- Fallback Handler ---
-    local custom_fallback_content
-    custom_fallback_content=$(jq -r --arg apex "$APEX_DOMAIN" '.[$apex].fallback_handler // ""' "$CONFIG_FILE")
-    create_fallback_handler "$APEX_DOMAIN" "$custom_fallback_content"
+    # Print root-level domain imports (positioned safely before the fallback block)
+    local root_log
+    root_log=$(echo "$SITE_JSON" | jq -r '.log != false')
 
-    # --- Main Block End ---
-    echo "}"
+    local root_imports
+    root_imports=$(echo "$SITE_JSON" | jq -r '.import[]?')
+
+    # Only print a single spacing newline if we have root logging or custom imports
+    if [[ "$root_log" == "true" || -n "$root_imports" ]]; then
+        echo
+    fi
+
+    if [[ "$root_log" == "true" ]]; then
+        indent_block "import ${LOG_SNIPPET} ${APEX_DOMAIN}" 1
+    fi
+
+    if [[ -n "$root_imports" ]]; then
+        while IFS= read -r snippet; do
+            if [[ -n "$snippet" ]]; then
+                indent_block "import $snippet" 1
+            fi
+        done <<< "$root_imports"
+    fi
+
+    # Fallback handler
+    indent_block "handle {" 1
+
+    local fallback_lines
+    fallback_lines=$(echo "$SITE_JSON" | jq -r '.fallback_handler[]?')
+
+    if [[ -n "$fallback_lines" ]]; then
+        while IFS= read -r line; do
+            indent_block "$line" 2
+        done <<< "$fallback_lines"
+    else
+        indent_block "redir https://home.${APEX_DOMAIN}" 2
+    fi
+
+    indent_block "}" 1
+    indent_block "}" 0
 }
 
-# --- Main Execution Loop ---
-while IFS= read -r apex_domain; do
-    if [ -z "$apex_domain" ]; then continue; fi
 
-    echo "▶️  Generating configuration for ${apex_domain}..."
-    output_sitefile="${OUTPUT_FILENAME_TEMPLATE/\{apex_domain\}/$apex_domain}"
-    
-    generate_content_for_apex "$apex_domain" > "$output_sitefile"
-    
-    echo "✅ Self-contained apex block successfully created at '$output_sitefile'"
-done < <(jq -r 'keys[]' "$CONFIG_FILE")
+# ──────────────────────────────────────────────────────────────────────────────
+# Execution
+# ──────────────────────────────────────────────────────────────────────────────
 
-echo "🎉 All configurations generated successfully."
-echo "ℹ️  Remember to update your main Caddyfile to import the generated files as needed."
+CONFIG_FILE="${1:-$DEFAULT_CONFIG_FILE}"
 
+# Validate file exists
+if [[ ! -f "$CONFIG_FILE" ]]; then
+    echo "❌ Error: Config file not found."
+    exit 1
+fi
+
+# Validate JSON syntax
+jq -e . "$CONFIG_FILE" >/dev/null || {
+    echo "❌ Invalid JSON in config file."
+    exit 1
+}
+
+check_for_collisions "$CONFIG_FILE"
+sort_config_file "$CONFIG_FILE"
+
+# Read each top-level block
+readarray -t blocks < <(jq -c '.[]' "$CONFIG_FILE")
+
+# Generate configurations directly to production paths safely via atomic swap
+for block in "${blocks[@]}"; do
+    readarray -t domains < <(jq -r '.domains[]' <<< "$block")
+    target=$(jq -r '.redirect_to // empty' <<< "$block")
+
+    for domain in "${domains[@]}"; do
+        echo "▶️  Generating: ${domain}"
+        output_file="${OUTPUT_FILENAME_TEMPLATE/\{apex_domain\}/$domain}"
+        mkdir -p "$(dirname "$output_file")"
+
+        tmp_output="${output_file}.tmp"
+        if [[ -n "$target" ]]; then
+            generate_redirect_block "$domain" "$target" > "$tmp_output"
+        else
+            generate_site_block "$block" "$domain" > "$tmp_output"
+        fi
+
+        mv "$tmp_output" "$output_file"
+    done
+done
+
+echo "🎉 All configurations generated and verified."

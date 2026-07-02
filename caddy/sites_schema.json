@@ -1,0 +1,156 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Caddy Sites Configuration Schema",
+  "description": "Schema for validating the JSON configuration file parsed by create_sites.sh to generate Caddy site configurations.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "properties": {
+      "domains": {
+        "type": "array",
+        "description": "An array of apex domains governed by this configuration block (e.g., mydomain.com).",
+        "minItems": 1,
+        "items": {
+          "type": "string",
+          "pattern": "^([a-zA-Z0-9-]+\\.)*[a-zA-Z0-9-]+\\.[a-zA-Z]{2,}$"
+        }
+      },
+      "redirect_to": {
+        "type": "string",
+        "description": "If specified, all domains in the array will generate wildcard redirects forwarding to this destination.",
+        "pattern": "^([a-zA-Z0-9-]+\\.)*[a-zA-Z0-9-]+\\.[a-zA-Z]{2,}$"
+      },
+      "log": {
+        "type": "boolean",
+        "description": "Specifies whether to inject the default apex domain logging snippet. Defaults to true.",
+        "default": true
+      },
+      "import": {
+        "type": "array",
+        "description": "An array of root-level Caddy snippets to import into the site block (positioned right before the fallback handler).",
+        "items": {
+          "type": "string"
+        }
+      },
+      "fallback_handler": {
+        "type": "array",
+        "description": "An array of raw Caddyfile directives representing the default fallback catch-all block.",
+        "items": {
+          "type": "string"
+        }
+      },
+      "services": {
+        "type": "object",
+        "description": "A map of subdomain service definitions belonging to these domains.",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Determines whether this service block is generated. Defaults to true.",
+              "default": true
+            },
+            "log": {
+              "type": "boolean",
+              "description": "Specifies whether to inject service-level log snippets. Defaults to true.",
+              "default": true
+            },
+            "hostnames": {
+              "type": "array",
+              "description": "An array of subdomains (prefixes only, e.g., 'home', 'dashboard') mapped to this service.",
+              "minItems": 1,
+              "items": {
+                "type": "string"
+              }
+            },
+            "import": {
+              "type": "array",
+              "description": "An array of service-level Caddy snippets to import.",
+              "items": {
+                "type": "string"
+              }
+            },
+            "handler": {
+              "type": "array",
+              "description": "An array of raw Caddyfile directives representing a custom handler block.",
+              "items": {
+                "type": "string"
+              }
+            },
+            "proxy_target": {
+              "type": "object",
+              "description": "Reverse proxy parameters. Do not define if using a custom 'handler'.",
+              "properties": {
+                "protocol": {
+                  "type": "string",
+                  "description": "The protocol schema used to connect upstream.",
+                  "enum": [
+                    "http://",
+                    "https://"
+                  ],
+                  "default": "http://"
+                },
+                "host_address": {
+                  "type": "string",
+                  "description": "The upstream hostname or IP address.",
+                  "oneOf": [
+                    { "format": "ipv4" },
+                    { "format": "ipv6" },
+                    { "format": "hostname" }
+                  ]
+                },
+                "port": {
+                  "type": "integer",
+                  "description": "The upstream port mapping.",
+                  "minimum": 1,
+                  "maximum": 65535
+                }
+              },
+              "required": [
+                "host_address"
+              ]
+            }
+          },
+          "required": [
+            "hostnames"
+          ],
+          "dependencies": {
+            "handler": {
+              "not": {
+                "required": [
+                  "proxy_target"
+                ]
+              }
+            },
+            "proxy_target": {
+              "not": {
+                "required": [
+                  "handler"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "required": [
+      "domains"
+    ],
+    "dependencies": {
+      "redirect_to": {
+        "not": {
+          "required": [
+            "fallback_handler"
+          ]
+        }
+      },
+      "fallback_handler": {
+        "not": {
+          "required": [
+            "redirect_to"
+          ]
+        }
+      }
+    }
+  }
+}

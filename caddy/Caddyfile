@@ -1,0 +1,131 @@
+# The Caddyfile is an easy way to configure your Caddy web server.
+#
+# Unless the file starts with a global options block, the first
+# uncommented line is always the address of your site.
+#
+# To use your own domain name (with automatic HTTPS), first make
+# sure your domain's A/AAAA DNS records are properly pointed to
+# this machine's public IP, then replace ":80" below with your
+# domain name.
+{
+	auto_https ignore_loaded_certs
+
+	log default {
+		# This format wraps the standard console log and removes the User-Agent header.
+		format filter {
+			wrap console
+			fields {
+				request>headers>User-Agent delete
+			}
+		}
+		level INFO
+	}
+}
+
+# ------------------------------------------------------------------------------
+# Reusable Snippets
+# ------------------------------------------------------------------------------
+# These are the powerful, reusable blocks that our generator script relies on.
+# They define common patterns for services.
+# ------------------------------------------------------------------------------
+
+# Snippet for backends with self-signed or invalid TLS certificates.
+(proxy_opts_tls_skip) {
+	# import proxy_opts_default
+	transport http {
+		tls_insecure_skip_verify
+	}
+}
+
+# Specify the log file name
+(slog) {
+	log {
+		output file /var/log/caddy/{args[0]}.log
+	}
+}
+
+# =========================================================================
+# 3. Client-Side Caching Snippet
+# Sets optimal Cache-Control headers for static assets and HTML.
+# Uses 'defer' so it overrides/injects headers even when reverse proxying.
+# =========================================================================
+# Usage: import caching
+(caching) {
+	# Cache static assets (CSS, JS, images, webp, fonts) for 1 week (604800 seconds).
+	# The 'immutable' flag tells the browser the file will never change.
+	@static_assets path *.css *.js *.ico *.woff *.woff2 *.webp *.png *.jpg *.jpeg *.gif *.svg *.otf *.ttf
+	header @static_assets Cache-Control "public, max-age=604800, immutable" defer
+
+	# Cache HTML documents using the safer "no-cache" revalidation pattern.
+	# Browsers will cache the page, but must check with Caddy (using fast ETag handshakes)
+	# before rendering to ensure they are serving the absolute latest version.
+	@html_docs path *.html *.htm
+	header @html_docs Cache-Control "public, no-cache" defer
+}
+
+# =========================================================================
+# 4. Shared Web Serving Base (Internal Snippet)
+# Consolidates boilerplate setup (root, compression, templates, file server)
+# used by both the HTML and PHP serving pipelines.
+# =========================================================================
+(serve_base) {
+	# Define the webroot directory context dynamically. {args[0]} is forwarded 
+	# from the calling snippet (e.g. serve_html or serve_php).
+	root * {args[0]}
+
+	# Enable compression algorithms. zstd is heavily preferred for modern browsers,
+	# falling back to gzip automatically if zstd is unsupported by the client.
+	encode gzip zstd
+
+	# Enable Caddy's template engine, allowing dynamic HTML/parsed server-side variables.
+	templates
+
+	# Standard production file server. Directory browsing is disabled by default 
+	# for safety, preventing external directory disclosure.
+	file_server
+}
+
+# =========================================================================
+# 5. Static HTML Serving Snippet (SPA Optimized, Inherits serve_base)
+# Configures a highly efficient static file server ideal for Single Page Apps
+# (React, Vue, Angular) and standard HTML/CSS frontends.
+# =========================================================================
+# Usage: import serve_html <absolute_root_directory_path>
+# Example: import serve_html /srv/etherprince
+(serve_html) {
+	# Import the shared web base configurations and forward our path argument down
+	import serve_base {args[0]}
+
+	# SPA Routing: Checks if the requested file path exists. If not, rewrites internally
+	# to /index.html. This allows client-side routers (like React Router) to handle the URI.
+	try_files {path} {path}.html /index.html
+}
+
+# =========================================================================
+# 6. PHP-FPM Web Application serving Snippet (Inherits serve_base)
+# Configures path routing and Unix socket forwarding to PHP FastCGI Process Manager.
+# Optimized for frameworks like WordPress, Laravel, or raw PHP scripts.
+# =========================================================================
+# Usage: import serve_php <absolute_root_directory_path>
+# Example: import serve_php /srv/untapped
+(serve_php) {
+	# Import the shared web base configurations and forward our path argument down
+	import serve_base {args[0]}
+
+	# Route dynamic script requests to the PHP-FPM listening engine via local Unix sockets.
+	# Using unix sockets bypasses TCP stack overhead, reducing socket exhaustion.
+	php_fastcgi unix//run/php/php8.5-fpm.sock
+
+	# Progressive PHP Path Resolution:
+	# 1. Checks for the literal file path (e.g. /about)
+	# 2. Checks for a corresponding PHP script (e.g. /about.php)
+	# 3. Checks for a corresponding HTML file (e.g. /about.html)
+	# 4. Fallback to /index.php (for front controllers like WordPress/Laravel routing)
+	# 5. Generic fallback to static /index.html
+	try_files {path} {path}.php {path}.html /index.php /index.html
+}
+
+# Refer to the Caddy docs for more information:
+# https://caddyserver.com/docs/caddyfile
+
+import /etc/caddy/conf.d/*.site
