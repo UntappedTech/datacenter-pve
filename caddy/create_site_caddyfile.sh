@@ -10,6 +10,7 @@
 #   - Safe JSON parsing via jq
 #   - Array-based handler blocks (no multiline string issues)
 #   - Strict indentation via indent_block()
+#   - Automatic LAN-only protection via 'import lan_only' for private services
 #
 # Output files are written to:
 #   /etc/caddy/conf.d/<apex>.site
@@ -182,6 +183,7 @@ EOF
 #   - Reverse proxy handlers
 #   - Dynamic Root Imports
 #   - Fallback handler
+# Injects "import lan_only" into any service block where "public" is false or omitted.
 generate_site_block() {
     local SITE_JSON="$1"
     local APEX_DOMAIN="$2"
@@ -194,7 +196,7 @@ generate_site_block() {
     tls /certs/${APEX_DOMAIN}.fullchain.pem /certs/${APEX_DOMAIN}.private.key.pem
 EOF
 
-    # Build regex for path-based redirects (only pulling from active/enabled services)
+    # Build regex for path-based redirects (pulling from all active/enabled services)
     local path_regex
     path_regex=$(echo "$SITE_JSON" | jq -r '
         [.services[]? |
@@ -218,14 +220,18 @@ EOF
         local svc_cfg
         svc_cfg=$(echo "$SITE_JSON" | jq -c --arg svc "$service" '.services[$svc]')
 
-        # Skip generating service block if explicitly disabled (safe from jq boolean coercion)
+        # Skip generating service block if explicitly disabled
         local enabled
         enabled=$(echo "$svc_cfg" | jq -r '.enabled != false')
         if [[ "$enabled" == "false" ]]; then
             continue
         fi
 
-        # Check if log is enabled (defaults to true; safe from jq boolean coercion)
+        # Check whether service is public (defaults to false)
+        local is_public
+        is_public=$(echo "$svc_cfg" | jq -r '.public == true')
+
+        # Check if log is enabled (defaults to true)
         local service_log
         service_log=$(echo "$svc_cfg" | jq -r '.log != false')
 
@@ -248,7 +254,7 @@ EOF
         local has_proxy
         has_proxy=$(echo "$svc_cfg" | jq -r 'if .proxy_target then "true" else "false" end')
 
-        # Case A: Reverse Proxy routing configuration is present
+        # Case A: Reverse Proxy routing configuration
         if [[ "$has_proxy" == "true" ]]; then
             local proto addr port
             proto=$(echo "$svc_cfg" | jq -r '.proxy_target.protocol // "http://"')
@@ -274,7 +280,11 @@ EOF
             fi
             indent_block "handle @${service} {" 1
 
-            # Cleanly render single-line proxy or block mapping depending on snippet inclusion
+            # Prepend LAN restriction snippet if public is false
+            if [[ "$is_public" == "false" ]]; then
+                indent_block "import lan_only" 2
+            fi
+
             if [[ -n "$svc_imports" ]]; then
                 indent_block "reverse_proxy ${full_proxy} {" 2
                 while IFS= read -r snippet; do
@@ -289,7 +299,7 @@ EOF
 
             indent_block "}" 1
 
-        # Case B: Custom Handlers and/or Snippet Imports are used (No proxy directive present)
+        # Case B: Custom Handlers / Snippets (No proxy target)
         else
             echo
             indent_block "@${service} host ${host_list}" 1
@@ -298,7 +308,11 @@ EOF
             fi
             indent_block "handle @${service} {" 1
 
-            # Print service-level snippet imports inside the handle block if defined
+            # Prepend LAN restriction snippet if public is false
+            if [[ "$is_public" == "false" ]]; then
+                indent_block "import lan_only" 2
+            fi
+
             if [[ -n "$svc_imports" ]]; then
                 while IFS= read -r snippet; do
                     if [[ -n "$snippet" ]]; then
@@ -318,7 +332,7 @@ EOF
         fi
     done
 
-    # Print root-level domain imports (positioned safely before the fallback block)
+    # Print root-level domain imports
     local root_log
     root_log=$(echo "$SITE_JSON" | jq -r '.log != false')
 

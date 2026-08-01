@@ -125,6 +125,20 @@
 	try_files {path} {path}.php {path}.html /index.php /index.html
 }
 
+# =========================================================================
+# 7. Enforce local network access only
+# =========================================================================
+# Usage: import lan_only <absolute_root_directory_path>
+(lan_only) {
+	# Match any incoming request that is NOT from a private/LAN IP address
+	@wan not remote_ip private_ranges
+
+	# Respond to WAN clients with a 403 status code and close the connection
+	respond @wan "403 Forbidden" 403 {
+		close
+	}
+}
+
 # Refer to the Caddy docs for more information:
 # https://caddyserver.com/docs/caddyfile
 
